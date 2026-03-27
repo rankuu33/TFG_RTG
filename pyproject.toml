@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asofs"
+version = "0.1.0"
+description = "ASOFS - Sistema de Ficheros Virtual para Administración de Sistemas Operativos"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Raúl Trejo González"}
+]
+keywords = ["filesystem", "fuse", "testing", "education", "aso", "ulpgc"]
+
+dependencies = [
+    "pyfuse3>=3.2.0",
+    "pyyaml>=6.0",
+    "trio>=0.22.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+asofs = "testfs.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
