@@ -8,23 +8,6 @@ Trabajo de Fin de Grado
 Escuela de Ingeniería Informática - ULPGC
 Autor: Raúl Trejo González
 Tutor: José Miguel Santos Espino
-
------------------------------------------------------------------------------
-
-Sistema de ficheros FUSE mínimo - "Hello World"
-
-Este módulo implementa un FS virtual básico para entender el ciclo de vida:
-    mount → getattr → readdir → read → unmount
-
-Uso:
-    asofs mount /tmp/asofs
-
-    # En otra terminal:
-    ls -la /tmp/asofs
-    cat /tmp/asofs/hello.txt
-
-    # Para desmontar:
-    fusermount -u /tmp/asofs
 """
 
 import os
@@ -49,12 +32,7 @@ class ASOFS(pyfuse3.Operations):
     
     Estructura actual (hardcodeada):
         /
-        └── hello.txt  (contenido: "Hola desde ASOFS!")
-    
-    Conceptos clave FUSE:
-        - inode: identificador único de cada fichero/directorio
-        - ROOT_INODE (1): siempre es el directorio raíz
-        - Las operaciones reciben inodes, no rutas
+        └── hello.txt
     """
     
     def __init__(self):
@@ -62,7 +40,6 @@ class ASOFS(pyfuse3.Operations):
         
         self._hello_content = b"Hola desde ASOFS!\n\nSistema de ficheros virtual para ASO.\n"
         
-        # Estructura interna: inode -> nodo
         self._files = {
             pyfuse3.ROOT_INODE: {
                 'name': '/',
@@ -80,11 +57,7 @@ class ASOFS(pyfuse3.Operations):
         log.info("ASOFS inicializado")
     
     async def getattr(self, inode, ctx=None):
-        """
-        Obtener atributos de un fichero (stat).
-        
-        Se llama constantemente: cada ls, cat, o acceso pasa por aquí.
-        """
+        """Obtener atributos de un fichero (stat)."""
         log.debug(f"getattr(inode={inode})")
         
         if inode not in self._files:
@@ -118,15 +91,7 @@ class ASOFS(pyfuse3.Operations):
         return entry
     
     async def lookup(self, parent_inode, name, ctx=None):
-        """
-        Buscar fichero por nombre en un directorio.
-        
-        cat /mnt/hello.txt ejecuta:
-            1. lookup(ROOT, 'hello.txt') → inode 2
-            2. getattr(2) → tamaño, permisos
-            3. open(2) → abre
-            4. read(2) → lee contenido
-        """
+        """Buscar fichero por nombre en un directorio."""
         name = name.decode('utf-8') if isinstance(name, bytes) else name
         log.debug(f"lookup(parent={parent_inode}, name='{name}')")
         
@@ -143,6 +108,18 @@ class ASOFS(pyfuse3.Operations):
         child_inode = parent['children'][name]
         return await self.getattr(child_inode, ctx)
     
+    async def opendir(self, inode, ctx):
+        """Abrir un directorio."""
+        log.debug(f"opendir(inode={inode})")
+        
+        if inode not in self._files:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+        
+        if self._files[inode]['type'] != 'dir':
+            raise pyfuse3.FUSEError(errno.ENOTDIR)
+        
+        return inode
+    
     async def readdir(self, inode, start_id, token):
         """Listar contenido de un directorio."""
         log.debug(f"readdir(inode={inode}, start_id={start_id})")
@@ -155,20 +132,21 @@ class ASOFS(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOTDIR)
         
         entries = [
-            (b'.', inode),
-            (b'..', inode),
+            ('.', inode),
+            ('..', inode),
         ]
         
         for name, child_inode in node['children'].items():
-            entries.append((name.encode('utf-8'), child_inode))
+            entries.append((name, child_inode))
         
         for i, (name, entry_inode) in enumerate(entries):
             if i < start_id:
                 continue
             
+            name_bytes = name.encode('utf-8') if isinstance(name, str) else name
             entry_attrs = await self.getattr(entry_inode)
             
-            if not pyfuse3.readdir_reply(token, name, entry_attrs, i + 1):
+            if not pyfuse3.readdir_reply(token, name_bytes, entry_attrs, i + 1):
                 break
     
     async def open(self, inode, flags, ctx):
