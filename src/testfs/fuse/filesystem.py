@@ -11,13 +11,16 @@ Tutor: José Miguel Santos Espino
 """
 
 import os
-import stat
 import errno
 import logging
 from argparse import ArgumentParser
 
 import pyfuse3
 import trio
+
+from testfs.model import (
+    FileSystem, FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode
+)
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -30,60 +33,103 @@ class ASOFS(pyfuse3.Operations):
     """
     Sistema de ficheros FUSE para prácticas de ASO.
     
-    Estructura actual (hardcodeada):
-        /
-        └── hello.txt
+    Usa el modelo de datos definido en testfs.model.
     """
     
-    def __init__(self):
+    def __init__(self, fs: FileSystem = None):
         super().__init__()
         
-        self._hello_content = b"Hola desde ASOFS!\n\nSistema de ficheros virtual para ASO.\n"
+        # Usar filesystem proporcionado o crear uno de ejemplo
+        if fs is not None:
+            self._fs = fs
+        else:
+            self._fs = self._create_example_fs()
         
-        self._files = {
-            pyfuse3.ROOT_INODE: {
-                'name': '/',
-                'type': 'dir',
-                'children': {'hello.txt': 2}
-            },
-            2: {
-                'name': 'hello.txt',
-                'type': 'file',
-                'content': self._hello_content,
-                'size': len(self._hello_content)
-            }
-        }
+        log.info(f"ASOFS inicializado con {len(self._fs)} nodos")
+    
+    def _create_example_fs(self) -> FileSystem:
+        """Crea un filesystem de ejemplo para pruebas."""
+        fs = FileSystem()
         
-        log.info("ASOFS inicializado")
+        # Fichero de bienvenida
+        hello = FileNode(
+            name="hello.txt",
+            content=b"Hola desde ASOFS!\n\nSistema de ficheros virtual para ASO.\n"
+        )
+        fs.add(hello)
+        
+        # Directorio de pruebas
+        test_dir = DirNode(name="pruebas")
+        fs.add(test_dir)
+        
+        # Fichero dentro del directorio
+        readme = FileNode(
+            name="README.md",
+            content=b"# Directorio de pruebas\n\nAqui van los ficheros de prueba.\n"
+        )
+        fs.add(readme, parent_inode=test_dir.inode)
+        
+        # Fichero con permisos especiales (SUID)
+        suid_file = FileNode(
+            name="suid_example.sh",
+            mode=0o4755,
+            content=b"#!/bin/bash\necho 'Soy SUID'\n"
+        )
+        fs.add(suid_file, parent_inode=test_dir.inode)
+        
+        # Enlace simbólico
+        link = SymlinkNode(
+            name="link_to_hello.txt",
+            target="hello.txt"
+        )
+        fs.add(link)
+        
+        # Enlace simbólico roto
+        broken_link = SymlinkNode(
+            name="broken_link.txt",
+            target="/ruta/que/no/existe.txt"
+        )
+        fs.add(broken_link)
+        
+        # FIFO
+        fifo = FifoNode(name="mi_pipe")
+        fs.add(fifo)
+        
+        return fs
     
     async def getattr(self, inode, ctx=None):
-        """Obtener atributos de un fichero (stat)."""
+        """Obtener atributos de un nodo."""
         log.debug(f"getattr(inode={inode})")
         
-        if inode not in self._files:
+        node = self._fs.get(inode)
+        if node is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
         entry = pyfuse3.EntryAttributes()
-        node = self._files[inode]
-        
         entry.st_ino = inode
+        entry.st_mode = node.st_mode
+        entry.st_uid = node.uid
+        entry.st_gid = node.gid
         
-        if node['type'] == 'dir':
-            entry.st_mode = stat.S_IFDIR | 0o755
+        # Tamaño
+        if isinstance(node, DirNode):
             entry.st_size = 4096
-            entry.st_nlink = 2
+            entry.st_nlink = 2 + len(node.children)
+        elif isinstance(node, (FileNode, SymlinkNode)):
+            entry.st_size = node.size
+            entry.st_nlink = 1
         else:
-            entry.st_mode = stat.S_IFREG | 0o644
-            entry.st_size = node['size']
+            entry.st_size = 0
             entry.st_nlink = 1
         
-        entry.st_uid = os.getuid()
-        entry.st_gid = os.getgid()
+        # Timestamps (en nanosegundos)
+        entry.st_atime_ns = int(node.atime * 1e9)
+        entry.st_mtime_ns = int(node.mtime * 1e9)
+        entry.st_ctime_ns = int(node.ctime * 1e9)
         
-        now_ns = int(1e9 * os.stat('.').st_mtime)
-        entry.st_atime_ns = now_ns
-        entry.st_mtime_ns = now_ns
-        entry.st_ctime_ns = now_ns
+        # Device ID para dispositivos
+        if isinstance(node, DeviceNode):
+            entry.st_rdev = node.rdev
         
         entry.attr_timeout = 1
         entry.entry_timeout = 1
@@ -91,31 +137,32 @@ class ASOFS(pyfuse3.Operations):
         return entry
     
     async def lookup(self, parent_inode, name, ctx=None):
-        """Buscar fichero por nombre en un directorio."""
+        """Buscar un nodo por nombre."""
         name = name.decode('utf-8') if isinstance(name, bytes) else name
         log.debug(f"lookup(parent={parent_inode}, name='{name}')")
         
-        if parent_inode not in self._files:
+        parent = self._fs.get(parent_inode)
+        if parent is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        parent = self._files[parent_inode]
-        if parent['type'] != 'dir':
+        if not isinstance(parent, DirNode):
             raise pyfuse3.FUSEError(errno.ENOTDIR)
         
-        if name not in parent['children']:
+        if name not in parent.children:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        child_inode = parent['children'][name]
+        child_inode = parent.children[name]
         return await self.getattr(child_inode, ctx)
     
     async def opendir(self, inode, ctx):
         """Abrir un directorio."""
         log.debug(f"opendir(inode={inode})")
         
-        if inode not in self._files:
+        node = self._fs.get(inode)
+        if node is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        if self._files[inode]['type'] != 'dir':
+        if not isinstance(node, DirNode):
             raise pyfuse3.FUSEError(errno.ENOTDIR)
         
         return inode
@@ -124,20 +171,19 @@ class ASOFS(pyfuse3.Operations):
         """Listar contenido de un directorio."""
         log.debug(f"readdir(inode={inode}, start_id={start_id})")
         
-        if inode not in self._files:
+        node = self._fs.get(inode)
+        if node is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        node = self._files[inode]
-        if node['type'] != 'dir':
+        if not isinstance(node, DirNode):
             raise pyfuse3.FUSEError(errno.ENOTDIR)
         
+        # Construir lista de entradas
         entries = [
             ('.', inode),
             ('..', inode),
         ]
-        
-        for name, child_inode in node['children'].items():
-            entries.append((name, child_inode))
+        entries.extend(node.children.items())
         
         for i, (name, entry_inode) in enumerate(entries):
             if i < start_id:
@@ -153,10 +199,11 @@ class ASOFS(pyfuse3.Operations):
         """Abrir un fichero."""
         log.debug(f"open(inode={inode}, flags={flags})")
         
-        if inode not in self._files:
+        node = self._fs.get(inode)
+        if node is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        if self._files[inode]['type'] != 'file':
+        if not isinstance(node, FileNode):
             raise pyfuse3.FUSEError(errno.EISDIR)
         
         return pyfuse3.FileInfo(fh=inode)
@@ -165,17 +212,30 @@ class ASOFS(pyfuse3.Operations):
         """Leer contenido de un fichero."""
         log.debug(f"read(fh={fh}, offset={offset}, size={size})")
         
-        inode = fh
-        
-        if inode not in self._files:
+        node = self._fs.get(fh)
+        if node is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        node = self._files[inode]
-        if node['type'] != 'file':
+        if not isinstance(node, FileNode):
             raise pyfuse3.FUSEError(errno.EISDIR)
         
-        content = node['content']
-        return content[offset:offset + size]
+        if node.content is None:
+            return b''
+        
+        return node.content[offset:offset + size]
+    
+    async def readlink(self, inode, ctx):
+        """Leer el destino de un enlace simbólico."""
+        log.debug(f"readlink(inode={inode})")
+        
+        node = self._fs.get(inode)
+        if node is None:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+        
+        if not isinstance(node, SymlinkNode):
+            raise pyfuse3.FUSEError(errno.EINVAL)
+        
+        return node.target.encode('utf-8')
 
 
 def main():
