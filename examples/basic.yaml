@@ -1,0 +1,89 @@
+# ASOFS - Configuración básica de ejemplo
+# ========================================
+
+defaults:
+  uid: 1000
+  gid: 1000
+
+root:
+  # Fichero simple
+  - name: "bienvenida.txt"
+    type: file
+    content: |
+      Bienvenido a ASOFS!
+      Sistema de ficheros virtual para ASO.
+
+  # Directorio con varios ficheros
+  - name: "documentos"
+    type: dir
+    children:
+      - name: "notas.txt"
+        type: file
+        content: "Mis notas de clase"
+      
+      - name: "tareas.md"
+        type: file
+        content: |
+          # Tareas pendientes
+          - Practicar find
+          - Estudiar permisos
+
+  # Directorio de prácticas con casos especiales
+  - name: "practicas"
+    type: dir
+    mode: "0755"
+    children:
+      # Fichero SUID
+      - name: "script_suid.sh"
+        type: file
+        mode: "4755"
+        content: |
+          #!/bin/bash
+          echo "Ejecutando con SUID"
+      
+      # Fichero SGID
+      - name: "script_sgid.sh"
+        type: file
+        mode: "2755"
+        content: |
+          #!/bin/bash
+          echo "Ejecutando con SGID"
+      
+      # Fichero sin permisos
+      - name: "secreto.txt"
+        type: file
+        mode: "0000"
+        content: "No deberías poder leer esto"
+      
+      # FIFO
+      - name: "mi_pipe"
+        type: fifo
+        mode: "0644"
+
+  # Enlaces simbólicos
+  - name: "link_documentos"
+    type: symlink
+    target: "documentos"
+
+  - name: "link_roto"
+    type: symlink
+    target: "/no/existe/este/fichero.txt"
+
+  # Ficheros con timestamps especiales
+  - name: "timestamps"
+    type: dir
+    children:
+      - name: "futuro.txt"
+        type: file
+        content: "Fichero del futuro"
+        mtime: "+365d"
+      
+      - name: "antiguo.txt"
+        type: file
+        content: "Fichero muy antiguo"
+        mtime: "-3650d"
+      
+      - name: "ayer.txt"
+        type: file
+        content: "Fichero de ayer"
+        mtime: "-1d"

@@ -9,18 +9,59 @@ Autor: Raúl Trejo González
 """
 
 import sys
+import os
 from argparse import ArgumentParser
 
 
 def cmd_mount(args):
     """Comando: montar sistema de ficheros FUSE."""
-    from testfs.fuse.filesystem import main as fuse_main
+    from testfs.fuse.filesystem import ASOFS, main as fuse_main
+    from testfs.config import load_config
+    from testfs.model import FileSystem
+    import logging
+    import pyfuse3
+    import trio
     
-    sys.argv = ['asofs', args.mountpoint]
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    log = logging.getLogger(__name__)
+    
+    # Crear punto de montaje si no existe
+    if not os.path.exists(args.mountpoint):
+        os.makedirs(args.mountpoint)
+    
+    # Cargar configuración o usar ejemplo
+    if args.config:
+        log.info(f"Cargando configuración desde {args.config}")
+        fs = load_config(args.config)
+    else:
+        log.info("Usando filesystem de ejemplo")
+        fs = None  # ASOFS creará uno de ejemplo
+    
+    # Crear ASOFS
+    asofs = ASOFS(fs)
+    
+    # Configurar FUSE
+    fuse_options = set(pyfuse3.default_options)
+    fuse_options.add('fsname=asofs')
+    
     if args.debug:
-        sys.argv.append('-d')
+        fuse_options.add('debug')
     
-    fuse_main()
+    pyfuse3.init(asofs, args.mountpoint, fuse_options)
+    
+    log.info(f"ASOFS montado en {args.mountpoint}")
+    log.info("Ctrl+C para desmontar")
+    
+    try:
+        trio.run(pyfuse3.main)
+    except KeyboardInterrupt:
+        log.info("Desmontando...")
+    finally:
+        pyfuse3.close()
+        log.info("ASOFS desmontado")
 
 
 def main():
