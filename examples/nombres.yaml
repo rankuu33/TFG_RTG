@@ -1,0 +1,110 @@
+# ASOFS - Nombres problemáticos para prácticas
+# =============================================
+# Casos típicos que complican el uso de comandos shell
+
+root:
+  # Espacios en nombres
+  - name: "fichero con espacios.txt"
+    type: file
+    content: "Hay que usar comillas o escape"
+
+  - name: "documento importante final (2).pdf"
+    type: file
+    content: "Nombre típico de descarga"
+
+  # Empiezan con guión (problemático para comandos)
+  - name: "-fichero.txt"
+    type: file
+    content: "Usar -- antes del nombre o ./-fichero.txt"
+
+  - name: "--help.txt"
+    type: file
+    content: "Parece una opción de comando"
+
+  # Caracteres especiales shell
+  - name: "precio$50.txt"
+    type: file
+    content: "El $ puede expandirse como variable"
+
+  - name: "nota;importante.txt"
+    type: file
+    content: "El ; separa comandos"
+
+  - name: "archivo|pipe.txt"
+    type: file
+    content: "El | es un pipe"
+
+  - name: "datos&background.txt"
+    type: file
+    content: "El & ejecuta en background"
+
+  - name: "test`whoami`.txt"
+    type: file
+    content: "Backticks ejecutan comandos"
+
+  - name: "con'comilla.txt"
+    type: file
+    content: "Comilla simple"
+
+  - name: 'con"doble.txt'
+    type: file
+    content: "Comilla doble"
+
+  # Unicode y acentos
+  - name: "información.txt"
+    type: file
+    content: "Acentos comunes en español"
+
+  - name: "日本語ファイル.txt"
+    type: file
+    content: "Nombre en japonés"
+
+  - name: "émoji_🎉.txt"
+    type: file
+    content: "Contiene emoji"
+
+  - name: "Ñoño.txt"
+    type: file
+    content: "La Ñ española"
+
+  # Nombres largos
+  - name: "este_es_un_nombre_de_fichero_extremadamente_largo_que_podria_causar_problemas_en_algunos_sistemas_o_al_mostrarlo_en_terminal_porque_supera_los_100_caracteres_facilmente.txt"
+    type: file
+    content: "Nombre muy largo"
+
+  # Puntos especiales
+  - name: ".oculto"
+    type: file
+    content: "Fichero oculto (empieza con punto)"
+
+  - name: "..raro"
+    type: file
+    content: "Dos puntos al inicio"
+
+  - name: "archivo..doble.txt"
+    type: file
+    content: "Doble punto en medio"
+
+  - name: "sin_extension."
+    type: file
+    content: "Termina en punto"
+
+  # Directorio con casos dentro
+  - name: "directorio raro"
+    type: dir
+    children:
+      - name: "  espacios_inicio.txt"
+        type: file
+        content: "Espacios al inicio del nombre"
+
+      - name: "espacios_final.txt   "
+        type: file
+        content: "Espacios al final del nombre"
+
+      - name: "tab\there.txt"
+        type: file
+        content: "Contiene un tabulador"
+
+      - name: "nueva\nlinea.txt"
+        type: file
+        content: "Contiene salto de línea"
