@@ -2,18 +2,7 @@
 ASOFS - Modelo de datos
 =======================
 
-Define las estructuras para representar nodos del sistema de ficheros:
-- FileNode: ficheros regulares
-- DirNode: directorios
-- SymlinkNode: enlaces simbólicos
-- FifoNode: named pipes
-- DeviceNode: dispositivos
-
-Cada nodo tiene atributos configurables:
-- Permisos (mode)
-- Propietario (uid/gid)
-- Timestamps (atime, mtime, ctime)
-- Tamaño (para ficheros)
+Define las estructuras para representar nodos del sistema de ficheros.
 """
 
 import os
@@ -32,22 +21,12 @@ class NodeType(Enum):
     FIFO = "fifo"
     DEVICE_CHAR = "char"
     DEVICE_BLOCK = "block"
-    HARDLINK = "hardlink"
 
 
 @dataclass
 class BaseNode:
     """
     Nodo base del sistema de ficheros.
-    
-    Attributes:
-        name: Nombre del fichero/directorio
-        mode: Permisos (ej: 0o755, 0o644)
-        uid: ID de usuario propietario
-        gid: ID de grupo propietario
-        atime: Tiempo de último acceso (timestamp)
-        mtime: Tiempo de última modificación (timestamp)
-        ctime: Tiempo de último cambio de metadatos (timestamp)
     """
     name: str
     mode: int = 0o644
@@ -57,29 +36,21 @@ class BaseNode:
     mtime: float = field(default_factory=time.time)
     ctime: float = field(default_factory=time.time)
     
-    # Se asigna al añadir al filesystem
     inode: int = 0
+    nlink: int = 1  # Contador de enlaces (hardlinks)
     
     @property
     def node_type(self) -> NodeType:
-        """Tipo de nodo (a implementar en subclases)."""
         raise NotImplementedError
     
     @property
     def st_mode(self) -> int:
-        """Modo completo para stat (tipo + permisos)."""
         raise NotImplementedError
 
 
 @dataclass
 class FileNode(BaseNode):
-    """
-    Fichero regular.
-    
-    Attributes:
-        size: Tamaño del fichero en bytes
-        content: Contenido (opcional, puede generarse on-demand)
-    """
+    """Fichero regular."""
     size: int = 0
     content: Optional[bytes] = None
     
@@ -98,12 +69,7 @@ class FileNode(BaseNode):
 
 @dataclass
 class DirNode(BaseNode):
-    """
-    Directorio.
-    
-    Attributes:
-        children: Diccionario nombre -> inode de los hijos
-    """
+    """Directorio."""
     mode: int = 0o755
     children: Dict[str, int] = field(default_factory=dict)
     
@@ -116,25 +82,18 @@ class DirNode(BaseNode):
         return stat.S_IFDIR | self.mode
     
     def add_child(self, name: str, inode: int):
-        """Añade un hijo al directorio."""
         self.children[name] = inode
     
     def remove_child(self, name: str):
-        """Elimina un hijo del directorio."""
         if name in self.children:
             del self.children[name]
 
 
 @dataclass
 class SymlinkNode(BaseNode):
-    """
-    Enlace simbólico.
-    
-    Attributes:
-        target: Ruta a la que apunta el enlace
-    """
+    """Enlace simbólico."""
     target: str = ""
-    mode: int = 0o777  # Los symlinks siempre tienen 777
+    mode: int = 0o777
     
     @property
     def node_type(self) -> NodeType:
@@ -146,7 +105,6 @@ class SymlinkNode(BaseNode):
     
     @property
     def size(self) -> int:
-        """El tamaño de un symlink es la longitud del target."""
         return len(self.target)
 
 
@@ -170,14 +128,7 @@ class FifoNode(BaseNode):
 
 @dataclass
 class DeviceNode(BaseNode):
-    """
-    Dispositivo (bloque o carácter).
-    
-    Attributes:
-        major: Número major del dispositivo
-        minor: Número minor del dispositivo
-        block: True si es dispositivo de bloque, False si es de carácter
-    """
+    """Dispositivo (bloque o carácter)."""
     major: int = 0
     minor: int = 0
     block: bool = False
@@ -199,52 +150,66 @@ class DeviceNode(BaseNode):
     
     @property
     def rdev(self) -> int:
-        """Genera el device ID para st_rdev."""
         return os.makedev(self.major, self.minor)
 
 
-# Tipo union para cualquier nodo
 Node = Union[FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode]
 
 
 class FileSystem:
     """
     Contenedor del sistema de ficheros virtual.
-    
-    Gestiona la colección de nodos y la asignación de inodes.
     """
     
-    # El inode 1 siempre es la raíz en FUSE
     ROOT_INODE = 1
     
     def __init__(self):
         self._nodes: Dict[int, Node] = {}
-        self._next_inode = 2  # El 1 es la raíz
+        self._next_inode = 2
         
-        # Crear directorio raíz
         root = DirNode(name="/")
         root.inode = self.ROOT_INODE
+        root.nlink = 2
         self._nodes[self.ROOT_INODE] = root
     
     @property
     def root(self) -> DirNode:
-        """Devuelve el nodo raíz."""
         return self._nodes[self.ROOT_INODE]
     
     def get(self, inode: int) -> Optional[Node]:
-        """Obtiene un nodo por su inode."""
         return self._nodes.get(inode)
     
     def add(self, node: Node, parent_inode: int = ROOT_INODE) -> int:
+        """Añade un nodo al filesystem."""
+        parent = self._nodes.get(parent_inode)
+        if parent is None:
+            raise ValueError(f"Parent inode {parent_inode} no existe")
+        if not isinstance(parent, DirNode):
+            raise ValueError(f"Parent inode {parent_inode} no es un directorio")
+        
+        node.inode = self._next_inode
+        self._next_inode += 1
+        
+        self._nodes[node.inode] = node
+        parent.add_child(node.name, node.inode)
+        
+        # Incrementar nlink del padre si es directorio
+        if isinstance(node, DirNode):
+            parent.nlink += 1
+        
+        return node.inode
+    
+    def add_hardlink(self, name: str, target_inode: int, parent_inode: int = ROOT_INODE) -> int:
         """
-        Añade un nodo al sistema de ficheros.
+        Crea un hardlink a un nodo existente.
         
         Args:
-            node: Nodo a añadir
-            parent_inode: Inode del directorio padre
+            name: Nombre del nuevo enlace
+            target_inode: Inode del fichero destino
+            parent_inode: Directorio donde crear el enlace
         
         Returns:
-            Inode asignado al nodo
+            Inode del fichero (el mismo que target_inode)
         """
         parent = self._nodes.get(parent_inode)
         if parent is None:
@@ -252,33 +217,34 @@ class FileSystem:
         if not isinstance(parent, DirNode):
             raise ValueError(f"Parent inode {parent_inode} no es un directorio")
         
-        # Asignar inode
-        node.inode = self._next_inode
-        self._next_inode += 1
+        target = self._nodes.get(target_inode)
+        if target is None:
+            raise ValueError(f"Target inode {target_inode} no existe")
+        if isinstance(target, DirNode):
+            raise ValueError("No se pueden crear hardlinks a directorios")
         
-        # Añadir al diccionario
-        self._nodes[node.inode] = node
+        # Añadir entrada en el directorio padre
+        parent.add_child(name, target_inode)
         
-        # Añadir como hijo del padre
-        parent.add_child(node.name, node.inode)
+        # Incrementar contador de enlaces
+        target.nlink += 1
         
-        return node.inode
+        return target_inode
+    
+    def find_by_name(self, name: str, parent_inode: int = ROOT_INODE) -> Optional[int]:
+        """Busca un nodo por nombre en un directorio."""
+        parent = self._nodes.get(parent_inode)
+        if parent is None or not isinstance(parent, DirNode):
+            return None
+        return parent.children.get(name)
     
     def list_dir(self, inode: int) -> List[tuple]:
-        """
-        Lista el contenido de un directorio.
-        
-        Returns:
-            Lista de tuplas (nombre, inode)
-        """
         node = self._nodes.get(inode)
         if node is None or not isinstance(node, DirNode):
             return []
-        
         return list(node.children.items())
     
     def __len__(self) -> int:
-        """Número total de nodos."""
         return len(self._nodes)
     
     def __repr__(self) -> str:

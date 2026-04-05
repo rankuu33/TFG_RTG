@@ -30,16 +30,11 @@ log = logging.getLogger(__name__)
 
 
 class ASOFS(pyfuse3.Operations):
-    """
-    Sistema de ficheros FUSE para prácticas de ASO.
-    
-    Usa el modelo de datos definido en testfs.model.
-    """
+    """Sistema de ficheros FUSE para prácticas de ASO."""
     
     def __init__(self, fs: FileSystem = None):
         super().__init__()
         
-        # Usar filesystem proporcionado o crear uno de ejemplo
         if fs is not None:
             self._fs = fs
         else:
@@ -51,25 +46,21 @@ class ASOFS(pyfuse3.Operations):
         """Crea un filesystem de ejemplo para pruebas."""
         fs = FileSystem()
         
-        # Fichero de bienvenida
         hello = FileNode(
             name="hello.txt",
             content=b"Hola desde ASOFS!\n\nSistema de ficheros virtual para ASO.\n"
         )
         fs.add(hello)
         
-        # Directorio de pruebas
         test_dir = DirNode(name="pruebas")
         fs.add(test_dir)
         
-        # Fichero dentro del directorio
         readme = FileNode(
             name="README.md",
             content=b"# Directorio de pruebas\n\nAqui van los ficheros de prueba.\n"
         )
         fs.add(readme, parent_inode=test_dir.inode)
         
-        # Fichero con permisos especiales (SUID)
         suid_file = FileNode(
             name="suid_example.sh",
             mode=0o4755,
@@ -77,21 +68,18 @@ class ASOFS(pyfuse3.Operations):
         )
         fs.add(suid_file, parent_inode=test_dir.inode)
         
-        # Enlace simbólico
         link = SymlinkNode(
             name="link_to_hello.txt",
             target="hello.txt"
         )
         fs.add(link)
         
-        # Enlace simbólico roto
         broken_link = SymlinkNode(
             name="broken_link.txt",
             target="/ruta/que/no/existe.txt"
         )
         fs.add(broken_link)
         
-        # FIFO
         fifo = FifoNode(name="mi_pipe")
         fs.add(fifo)
         
@@ -110,17 +98,15 @@ class ASOFS(pyfuse3.Operations):
         entry.st_mode = node.st_mode
         entry.st_uid = node.uid
         entry.st_gid = node.gid
+        entry.st_nlink = node.nlink
         
         # Tamaño
         if isinstance(node, DirNode):
             entry.st_size = 4096
-            entry.st_nlink = 2 + len(node.children)
         elif isinstance(node, (FileNode, SymlinkNode)):
             entry.st_size = node.size
-            entry.st_nlink = 1
         else:
             entry.st_size = 0
-            entry.st_nlink = 1
         
         # Timestamps (en nanosegundos)
         entry.st_atime_ns = int(node.atime * 1e9)
@@ -178,7 +164,6 @@ class ASOFS(pyfuse3.Operations):
         if not isinstance(node, DirNode):
             raise pyfuse3.FUSEError(errno.ENOTDIR)
         
-        # Construir lista de entradas
         entries = [
             ('.', inode),
             ('..', inode),

@@ -1,0 +1,37 @@
+# ASOFS - Ejemplo de hardlinks
+# =============================
+
+root:
+  # Fichero original
+  - name: "original.txt"
+    type: file
+    content: |
+      Este fichero tiene múltiples nombres (hardlinks).
+      Todos apuntan al mismo inode.
+
+  # Hardlinks al fichero original
+  - name: "hardlink1.txt"
+    type: hardlink
+    target: "/original.txt"
+
+  - name: "hardlink2.txt"
+    type: hardlink
+    target: "/original.txt"
+
+  # Directorio con más ejemplos
+  - name: "datos"
+    type: dir
+    children:
+      - name: "importante.dat"
+        type: file
+        content: "Datos importantes"
+      
+      # Hardlink dentro del mismo directorio
+      - name: "backup.dat"
+        type: hardlink
+        target: "/datos/importante.dat"
+
+  # Hardlink desde raíz a fichero en subdirectorio
+  - name: "acceso_rapido.dat"
+    type: hardlink
+    target: "/datos/importante.dat"

@@ -3,37 +3,13 @@ ASOFS - Parser de configuración YAML
 ====================================
 
 Lee ficheros YAML y genera un FileSystem con los nodos especificados.
-
-Formato soportado:
-    
-    # Metadatos globales (opcional)
-    defaults:
-      uid: 1000
-      gid: 1000
-    
-    # Estructura del sistema de ficheros
-    root:
-      - name: "fichero.txt"
-        type: file
-        content: "Contenido del fichero"
-        mode: 0644
-      
-      - name: "directorio"
-        type: dir
-        children:
-          - name: "otro.txt"
-            type: file
-      
-      - name: "enlace"
-        type: symlink
-        target: "fichero.txt"
 """
 
 import os
 import time
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 
 from testfs.model import (
     FileSystem, FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode
@@ -46,9 +22,7 @@ class ConfigError(Exception):
 
 
 class ConfigParser:
-    """
-    Parser de configuración YAML para ASOFS.
-    """
+    """Parser de configuración YAML para ASOFS."""
     
     def __init__(self):
         self._defaults = {
@@ -57,34 +31,25 @@ class ConfigParser:
             'file_mode': 0o644,
             'dir_mode': 0o755,
         }
+        # Cola de hardlinks pendientes (se procesan al final)
+        self._pending_hardlinks: List[Tuple[str, str, int]] = []
+        # Mapa de rutas a inodes para resolver hardlinks
+        self._path_to_inode: Dict[str, int] = {}
     
     def parse_file(self, path: str) -> FileSystem:
-        """
-        Lee un fichero YAML y devuelve un FileSystem.
-        
-        Args:
-            path: Ruta al fichero YAML
-        
-        Returns:
-            FileSystem configurado
-        """
+        """Lee un fichero YAML y devuelve un FileSystem."""
         with open(path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        
         return self.parse(config)
     
     def parse(self, config: Dict[str, Any]) -> FileSystem:
-        """
-        Parsea un diccionario de configuración.
-        
-        Args:
-            config: Diccionario con la configuración
-        
-        Returns:
-            FileSystem configurado
-        """
+        """Parsea un diccionario de configuración."""
         if config is None:
             config = {}
+        
+        # Reset estado
+        self._pending_hardlinks = []
+        self._path_to_inode = {'/': FileSystem.ROOT_INODE}
         
         # Cargar defaults
         if 'defaults' in config:
@@ -96,24 +61,30 @@ class ConfigParser:
         # Parsear nodos raíz
         if 'root' in config:
             for node_config in config['root']:
-                self._parse_node(fs, node_config, fs.ROOT_INODE)
+                self._parse_node(fs, node_config, fs.ROOT_INODE, '/')
+        
+        # Procesar hardlinks pendientes
+        self._process_hardlinks(fs)
         
         return fs
     
-    def _parse_node(self, fs: FileSystem, config: Dict[str, Any], parent_inode: int):
-        """
-        Parsea un nodo y lo añade al filesystem.
-        
-        Args:
-            fs: FileSystem donde añadir
-            config: Configuración del nodo
-            parent_inode: Inode del directorio padre
-        """
+    def _parse_node(self, fs: FileSystem, config: Dict[str, Any], parent_inode: int, parent_path: str):
+        """Parsea un nodo y lo añade al filesystem."""
         node_type = config.get('type', 'file')
         name = config.get('name')
         
         if not name:
             raise ConfigError("Cada nodo debe tener un 'name'")
+        
+        current_path = f"{parent_path.rstrip('/')}/{name}"
+        
+        # Si es hardlink, encolar para procesar después
+        if node_type == 'hardlink':
+            target = config.get('target')
+            if not target:
+                raise ConfigError(f"Hardlink '{name}' necesita 'target'")
+            self._pending_hardlinks.append((name, target, parent_inode))
+            return
         
         # Atributos comunes
         mode = self._parse_mode(config.get('mode'), node_type)
@@ -141,12 +112,27 @@ class ConfigParser:
             raise ConfigError(f"Tipo de nodo desconocido: {node_type}")
         
         # Añadir al filesystem
-        fs.add(node, parent_inode)
+        inode = fs.add(node, parent_inode)
+        
+        # Registrar ruta -> inode
+        self._path_to_inode[current_path] = inode
         
         # Si es directorio, parsear hijos
         if node_type == 'dir' and 'children' in config:
             for child_config in config['children']:
-                self._parse_node(fs, child_config, node.inode)
+                self._parse_node(fs, child_config, node.inode, current_path)
+    
+    def _process_hardlinks(self, fs: FileSystem):
+        """Procesa los hardlinks pendientes."""
+        for name, target, parent_inode in self._pending_hardlinks:
+            # Resolver target a inode
+            target_path = target if target.startswith('/') else f"/{target}"
+            target_inode = self._path_to_inode.get(target_path)
+            
+            if target_inode is None:
+                raise ConfigError(f"Hardlink '{name}' apunta a '{target}' que no existe")
+            
+            fs.add_hardlink(name, target_inode, parent_inode)
     
     def _parse_mode(self, mode_value: Any, node_type: str) -> int:
         """Parsea el modo/permisos."""
@@ -159,7 +145,6 @@ class ConfigParser:
             return mode_value
         
         if isinstance(mode_value, str):
-            # Soportar formato octal: "0755", "755", "0o755"
             mode_str = mode_value.lower().replace('0o', '')
             try:
                 return int(mode_str, 8)
@@ -177,17 +162,14 @@ class ConfigParser:
             return float(ts_value)
         
         if isinstance(ts_value, str):
-            # Soportar formatos relativos
             ts_lower = ts_value.lower()
             
             if ts_lower == 'now':
                 return time.time()
             
-            # Formato: "+1d", "-30d", "+1h", etc.
             if ts_lower.startswith(('+', '-')):
                 return self._parse_relative_time(ts_lower)
             
-            # Intentar parsear como fecha ISO
             try:
                 from datetime import datetime
                 dt = datetime.fromisoformat(ts_value)
@@ -299,14 +281,6 @@ class ConfigParser:
 
 
 def load_config(path: str) -> FileSystem:
-    """
-    Función de conveniencia para cargar configuración.
-    
-    Args:
-        path: Ruta al fichero YAML
-    
-    Returns:
-        FileSystem configurado
-    """
+    """Función de conveniencia para cargar configuración."""
     parser = ConfigParser()
     return parser.parse_file(path)
