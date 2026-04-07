@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from testfs.model import (
     FileSystem, FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode
 )
+from testfs.generator import Generator, pick_from_distribution
 
 
 class ConfigError(Exception):
@@ -31,10 +32,9 @@ class ConfigParser:
             'file_mode': 0o644,
             'dir_mode': 0o755,
         }
-        # Cola de hardlinks pendientes (se procesan al final)
         self._pending_hardlinks: List[Tuple[str, str, int]] = []
-        # Mapa de rutas a inodes para resolver hardlinks
         self._path_to_inode: Dict[str, int] = {}
+        self._generator: Generator = None
     
     def parse_file(self, path: str) -> FileSystem:
         """Lee un fichero YAML y devuelve un FileSystem."""
@@ -55,6 +55,10 @@ class ConfigParser:
         if 'defaults' in config:
             self._defaults.update(config['defaults'])
         
+        # Crear generador con semilla si se especifica
+        seed = config.get('seed')
+        self._generator = Generator(seed=seed)
+        
         # Crear filesystem
         fs = FileSystem()
         
@@ -70,6 +74,12 @@ class ConfigParser:
     
     def _parse_node(self, fs: FileSystem, config: Dict[str, Any], parent_inode: int, parent_path: str):
         """Parsea un nodo y lo añade al filesystem."""
+        
+        # Si es generación masiva
+        if 'generate' in config:
+            self._generator.generate(fs, config['generate'], parent_inode)
+            return
+        
         node_type = config.get('type', 'file')
         name = config.get('name')
         
@@ -125,7 +135,6 @@ class ConfigParser:
     def _process_hardlinks(self, fs: FileSystem):
         """Procesa los hardlinks pendientes."""
         for name, target, parent_inode in self._pending_hardlinks:
-            # Resolver target a inode
             target_path = target if target.startswith('/') else f"/{target}"
             target_inode = self._path_to_inode.get(target_path)
             
@@ -140,6 +149,11 @@ class ConfigParser:
             if node_type == 'dir':
                 return self._defaults['dir_mode']
             return self._defaults['file_mode']
+        
+        # Soporte para distribuciones
+        if isinstance(mode_value, str) and mode_value.startswith('dist:'):
+            dist_name = mode_value[5:]
+            return pick_from_distribution(dist_name)
         
         if isinstance(mode_value, int):
             return mode_value

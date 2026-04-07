@@ -1,0 +1,68 @@
+# ASOFS - Generación masiva de ficheros
+# ======================================
+# Ideal para crear escenarios de práctica
+
+seed: 42  # Reproducibilidad
+
+root:
+  # 50 ficheros con patrón numérico
+  - generate:
+      type: file
+      count: 50
+      pattern: "datos_{n:04d}.txt"
+      size: [100, 500]
+      content_type: text
+
+  # 20 ficheros con nombres aleatorios
+  - generate:
+      type: file
+      count: 20
+      pattern: "file_{random}.dat"
+      size: [0, 100]
+
+  # 10 symlinks rotos
+  - generate:
+      type: symlink
+      count: 10
+      pattern: "broken_{n:02d}.lnk"
+      target: "/no/existe/fichero_{n}.txt"
+
+  # 5 FIFOs
+  - generate:
+      type: fifo
+      count: 5
+      pattern: "pipe_{alpha}"
+
+  # Directorio con ficheros de distintas fechas
+  - name: "historico"
+    type: dir
+    children:
+      - generate:
+          type: file
+          count: 30
+          pattern: "log_{n:03d}.log"
+          size: [50, 200]
+          time_range: ["-365d", "-1d"]
+
+  # Directorio con estructura anidada
+  - name: "proyecto"
+    type: dir
+    children:
+      - generate:
+          type: dir
+          count: 5
+          pattern: "modulo_{n:02d}"
+          children:
+            type: file
+            count: 10
+            pattern: "src_{n:02d}.py"
+            size: [100, 300]
+
+  # Mezcla de tipos aleatorios
+  - name: "varios"
+    type: dir
+    children:
+      - generate:
+          type: mixed
+          count: 15
+          pattern: "item_{n:03d}"
