@@ -3,6 +3,21 @@ ASOFS - Parser de configuración YAML
 ====================================
 
 Lee ficheros YAML y genera un FileSystem con los nodos especificados.
+
+Soporte para usuarios/grupos ficticios:
+    
+    users:
+      alice: 1001
+      bob: 1002
+    
+    groups:
+      students: 2001
+      teachers: 2002
+    
+    root:
+      - name: "fichero.txt"
+        owner: alice
+        group: students
 """
 
 import os
@@ -35,6 +50,10 @@ class ConfigParser:
         self._pending_hardlinks: List[Tuple[str, str, int]] = []
         self._path_to_inode: Dict[str, int] = {}
         self._generator: Generator = None
+        
+        # Mapeo de usuarios y grupos ficticios
+        self._users: Dict[str, int] = {}
+        self._groups: Dict[str, int] = {}
     
     def parse_file(self, path: str) -> FileSystem:
         """Lee un fichero YAML y devuelve un FileSystem."""
@@ -50,10 +69,27 @@ class ConfigParser:
         # Reset estado
         self._pending_hardlinks = []
         self._path_to_inode = {'/': FileSystem.ROOT_INODE}
+        self._users = {}
+        self._groups = {}
+        
+        # Cargar usuarios y grupos ficticios
+        if 'users' in config:
+            self._users = {str(k): int(v) for k, v in config['users'].items()}
+        
+        if 'groups' in config:
+            self._groups = {str(k): int(v) for k, v in config['groups'].items()}
         
         # Cargar defaults
         if 'defaults' in config:
-            self._defaults.update(config['defaults'])
+            defaults = config['defaults']
+            
+            # Resolver owner/group en defaults
+            if 'owner' in defaults:
+                defaults['uid'] = self._resolve_uid(defaults.pop('owner'))
+            if 'group' in defaults:
+                defaults['gid'] = self._resolve_gid(defaults.pop('group'))
+            
+            self._defaults.update(defaults)
         
         # Crear generador con semilla si se especifica
         seed = config.get('seed')
@@ -71,6 +107,46 @@ class ConfigParser:
         self._process_hardlinks(fs)
         
         return fs
+    
+    def _resolve_uid(self, value: Any) -> int:
+        """Resuelve un uid desde nombre o número."""
+        if value is None:
+            return self._defaults['uid']
+        
+        if isinstance(value, int):
+            return value
+        
+        value_str = str(value)
+        
+        # Buscar en usuarios ficticios
+        if value_str in self._users:
+            return self._users[value_str]
+        
+        # Intentar como número
+        try:
+            return int(value_str)
+        except ValueError:
+            raise ConfigError(f"Usuario desconocido: {value}")
+    
+    def _resolve_gid(self, value: Any) -> int:
+        """Resuelve un gid desde nombre o número."""
+        if value is None:
+            return self._defaults['gid']
+        
+        if isinstance(value, int):
+            return value
+        
+        value_str = str(value)
+        
+        # Buscar en grupos ficticios
+        if value_str in self._groups:
+            return self._groups[value_str]
+        
+        # Intentar como número
+        try:
+            return int(value_str)
+        except ValueError:
+            raise ConfigError(f"Grupo desconocido: {value}")
     
     def _parse_node(self, fs: FileSystem, config: Dict[str, Any], parent_inode: int, parent_path: str):
         """Parsea un nodo y lo añade al filesystem."""
@@ -98,8 +174,10 @@ class ConfigParser:
         
         # Atributos comunes
         mode = self._parse_mode(config.get('mode'), node_type)
-        uid = config.get('uid', self._defaults['uid'])
-        gid = config.get('gid', self._defaults['gid'])
+        
+        # Resolver owner/group (soporta nombres ficticios)
+        uid = self._resolve_uid(config.get('owner', config.get('uid')))
+        gid = self._resolve_gid(config.get('group', config.get('gid')))
         
         # Timestamps
         now = time.time()

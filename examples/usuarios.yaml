@@ -1,0 +1,121 @@
+# ASOFS - Usuarios y grupos ficticios
+# =====================================
+# Simula propietarios sin necesidad de crearlos en el sistema
+
+users:
+  root: 0
+  alice: 1001
+  bob: 1002
+  charlie: 1003
+  profesor: 2000
+  nobody: 65534
+
+groups:
+  root: 0
+  students: 2001
+  teachers: 2002
+  staff: 2003
+  nogroup: 65534
+
+defaults:
+  owner: profesor
+  group: teachers
+
+root:
+  # Ficheros del profesor
+  - name: "examen.pdf"
+    type: file
+    content: "Contenido del examen"
+    mode: "0600"
+    owner: profesor
+    group: teachers
+
+  - name: "notas.xlsx"
+    type: file
+    content: "Notas de los alumnos"
+    mode: "0640"
+    owner: profesor
+    group: teachers
+
+  # Directorio de alumnos
+  - name: "alumnos"
+    type: dir
+    mode: "0755"
+    owner: profesor
+    group: students
+    children:
+      - name: "alice"
+        type: dir
+        mode: "0700"
+        owner: alice
+        group: students
+        children:
+          - name: "tarea1.txt"
+            type: file
+            content: "Tarea de Alice"
+            owner: alice
+            group: students
+          
+          - name: "tarea2.txt"
+            type: file
+            content: "Segunda tarea"
+            owner: alice
+            group: students
+
+      - name: "bob"
+        type: dir
+        mode: "0700"
+        owner: bob
+        group: students
+        children:
+          - name: "tarea1.txt"
+            type: file
+            content: "Tarea de Bob"
+            owner: bob
+            group: students
+
+      - name: "charlie"
+        type: dir
+        mode: "0750"
+        owner: charlie
+        group: students
+        children:
+          - name: "tarea1.txt"
+            type: file
+            content: "Tarea de Charlie"
+            owner: charlie
+            group: students
+
+  # Fichero de sistema
+  - name: "config_sistema"
+    type: file
+    content: "Configuración importante"
+    mode: "0644"
+    owner: root
+    group: root
+
+  # Fichero sin dueño válido
+  - name: "huerfano.txt"
+    type: file
+    content: "Fichero sin dueño conocido"
+    owner: nobody
+    group: nogroup
+
+  # Directorio compartido con sticky bit
+  - name: "compartido"
+    type: dir
+    mode: "1777"
+    owner: root
+    group: students
+    children:
+      - name: "alice_public.txt"
+        type: file
+        owner: alice
+        group: students
+        content: "Fichero público de Alice"
+      
+      - name: "bob_public.txt"
+        type: file
+        owner: bob
+        group: students
+        content: "Fichero público de Bob"
