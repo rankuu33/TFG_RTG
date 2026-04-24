@@ -3,21 +3,6 @@ ASOFS - Parser de configuración YAML
 ====================================
 
 Lee ficheros YAML y genera un FileSystem con los nodos especificados.
-
-Soporte para usuarios/grupos ficticios:
-    
-    users:
-      alice: 1001
-      bob: 1002
-    
-    groups:
-      students: 2001
-      teachers: 2002
-    
-    root:
-      - name: "fichero.txt"
-        owner: alice
-        group: students
 """
 
 import os
@@ -27,7 +12,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
 from testfs.model import (
-    FileSystem, FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode
+    FileSystem, FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode,
+    parse_size
 )
 from testfs.generator import Generator, pick_from_distribution
 
@@ -51,7 +37,6 @@ class ConfigParser:
         self._path_to_inode: Dict[str, int] = {}
         self._generator: Generator = None
         
-        # Mapeo de usuarios y grupos ficticios
         self._users: Dict[str, int] = {}
         self._groups: Dict[str, int] = {}
     
@@ -66,24 +51,20 @@ class ConfigParser:
         if config is None:
             config = {}
         
-        # Reset estado
         self._pending_hardlinks = []
         self._path_to_inode = {'/': FileSystem.ROOT_INODE}
         self._users = {}
         self._groups = {}
         
-        # Cargar usuarios y grupos ficticios
         if 'users' in config:
             self._users = {str(k): int(v) for k, v in config['users'].items()}
         
         if 'groups' in config:
             self._groups = {str(k): int(v) for k, v in config['groups'].items()}
         
-        # Cargar defaults
         if 'defaults' in config:
             defaults = config['defaults']
             
-            # Resolver owner/group en defaults
             if 'owner' in defaults:
                 defaults['uid'] = self._resolve_uid(defaults.pop('owner'))
             if 'group' in defaults:
@@ -91,19 +72,15 @@ class ConfigParser:
             
             self._defaults.update(defaults)
         
-        # Crear generador con semilla si se especifica
         seed = config.get('seed')
         self._generator = Generator(seed=seed)
         
-        # Crear filesystem
         fs = FileSystem()
         
-        # Parsear nodos raíz
         if 'root' in config:
             for node_config in config['root']:
                 self._parse_node(fs, node_config, fs.ROOT_INODE, '/')
         
-        # Procesar hardlinks pendientes
         self._process_hardlinks(fs)
         
         return fs
@@ -118,11 +95,9 @@ class ConfigParser:
         
         value_str = str(value)
         
-        # Buscar en usuarios ficticios
         if value_str in self._users:
             return self._users[value_str]
         
-        # Intentar como número
         try:
             return int(value_str)
         except ValueError:
@@ -138,11 +113,9 @@ class ConfigParser:
         
         value_str = str(value)
         
-        # Buscar en grupos ficticios
         if value_str in self._groups:
             return self._groups[value_str]
         
-        # Intentar como número
         try:
             return int(value_str)
         except ValueError:
@@ -151,7 +124,6 @@ class ConfigParser:
     def _parse_node(self, fs: FileSystem, config: Dict[str, Any], parent_inode: int, parent_path: str):
         """Parsea un nodo y lo añade al filesystem."""
         
-        # Si es generación masiva
         if 'generate' in config:
             self._generator.generate(fs, config['generate'], parent_inode)
             return
@@ -164,7 +136,6 @@ class ConfigParser:
         
         current_path = f"{parent_path.rstrip('/')}/{name}"
         
-        # Si es hardlink, encolar para procesar después
         if node_type == 'hardlink':
             target = config.get('target')
             if not target:
@@ -172,20 +143,16 @@ class ConfigParser:
             self._pending_hardlinks.append((name, target, parent_inode))
             return
         
-        # Atributos comunes
         mode = self._parse_mode(config.get('mode'), node_type)
         
-        # Resolver owner/group (soporta nombres ficticios)
         uid = self._resolve_uid(config.get('owner', config.get('uid')))
         gid = self._resolve_gid(config.get('group', config.get('gid')))
         
-        # Timestamps
         now = time.time()
         atime = self._parse_timestamp(config.get('atime'), now)
         mtime = self._parse_timestamp(config.get('mtime'), now)
         ctime = self._parse_timestamp(config.get('ctime'), now)
         
-        # Crear nodo según tipo
         if node_type == 'file':
             node = self._create_file(config, name, mode, uid, gid, atime, mtime, ctime)
         elif node_type == 'dir':
@@ -199,13 +166,10 @@ class ConfigParser:
         else:
             raise ConfigError(f"Tipo de nodo desconocido: {node_type}")
         
-        # Añadir al filesystem
         inode = fs.add(node, parent_inode)
         
-        # Registrar ruta -> inode
         self._path_to_inode[current_path] = inode
         
-        # Si es directorio, parsear hijos
         if node_type == 'dir' and 'children' in config:
             for child_config in config['children']:
                 self._parse_node(fs, child_config, node.inode, current_path)
@@ -228,7 +192,6 @@ class ConfigParser:
                 return self._defaults['dir_mode']
             return self._defaults['file_mode']
         
-        # Soporte para distribuciones
         if isinstance(mode_value, str) and mode_value.startswith('dist:'):
             dist_name = mode_value[5:]
             return pick_from_distribution(dist_name)
@@ -295,11 +258,19 @@ class ConfigParser:
     
     def _create_file(self, config, name, mode, uid, gid, atime, mtime, ctime) -> FileNode:
         """Crea un FileNode."""
-        content = config.get('content', '')
-        if isinstance(content, str):
-            content = content.encode('utf-8')
+        content = config.get('content')
+        content_type = config.get('content_type', 'static')
+        size_value = config.get('size')
         
-        size = config.get('size', len(content) if content else 0)
+        # Si hay contenido estático
+        if content is not None:
+            if isinstance(content, str):
+                content = content.encode('utf-8')
+            size = len(content)
+            content_type = 'static'
+        else:
+            content = None
+            size = parse_size(size_value) if size_value else 0
         
         return FileNode(
             name=name,
@@ -310,7 +281,9 @@ class ConfigParser:
             mtime=mtime,
             ctime=ctime,
             size=size,
-            content=content
+            content=content,
+            content_type=content_type,
+            content_seed=hash(name) & 0xFFFFFFFF
         )
     
     def _create_dir(self, config, name, mode, uid, gid, atime, mtime, ctime) -> DirNode:

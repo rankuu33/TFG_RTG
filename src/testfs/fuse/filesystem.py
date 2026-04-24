@@ -103,7 +103,9 @@ class ASOFS(pyfuse3.Operations):
         # Tamaño
         if isinstance(node, DirNode):
             entry.st_size = 4096
-        elif isinstance(node, (FileNode, SymlinkNode)):
+        elif isinstance(node, FileNode):
+            entry.st_size = node.size
+        elif isinstance(node, SymlinkNode):
             entry.st_size = node.size
         else:
             entry.st_size = 0
@@ -204,10 +206,8 @@ class ASOFS(pyfuse3.Operations):
         if not isinstance(node, FileNode):
             raise pyfuse3.FUSEError(errno.EISDIR)
         
-        if node.content is None:
-            return b''
-        
-        return node.content[offset:offset + size]
+        # Usar el método read() del nodo (genera contenido on-demand)
+        return node.read(offset, size)
     
     async def readlink(self, inode, ctx):
         """Leer el destino de un enlace simbólico."""

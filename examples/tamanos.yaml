@@ -1,0 +1,72 @@
+# ASOFS - Tamaños grandes virtuales
+# ==================================
+# Ficheros que reportan tamaños grandes sin ocupar memoria
+
+root:
+  # Tamaños pequeños
+  - name: "pequeno_100b.bin"
+    type: file
+    size: 100
+    content_type: zeros
+
+  - name: "pequeno_1kb.txt"
+    type: file
+    size: "1KB"
+    content_type: text
+
+  # Tamaños medianos
+  - name: "mediano_500kb.bin"
+    type: file
+    size: "500KB"
+    content_type: pattern
+
+  - name: "mediano_10mb.bin"
+    type: file
+    size: "10MB"
+    content_type: random
+
+  - name: "mediano_100mb.dat"
+    type: file
+    size: "100MB"
+    content_type: zeros
+
+  # Tamaños grandes
+  - name: "grande_1gb.img"
+    type: file
+    size: "1GB"
+    content_type: zeros
+
+  - name: "grande_5gb.iso"
+    type: file
+    size: "5GB"
+    content_type: pattern
+
+  # Tamaños muy grandes
+  - name: "enorme_100gb.vdi"
+    type: file
+    size: "100GB"
+    content_type: zeros
+
+  - name: "masivo_1tb.raw"
+    type: file
+    size: "1TB"
+    content_type: zeros
+
+  # Directorio con variedad
+  - name: "backups"
+    type: dir
+    children:
+      - name: "backup_full.tar.gz"
+        type: file
+        size: "50GB"
+        content_type: random
+
+      - name: "backup_incremental.tar.gz"
+        type: file
+        size: "2GB"
+        content_type: random
+
+      - name: "logs_comprimidos.zip"
+        type: file
+        size: "500MB"
+        content_type: text

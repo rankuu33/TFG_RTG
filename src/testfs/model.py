@@ -8,9 +8,81 @@ Define las estructuras para representar nodos del sistema de ficheros.
 import os
 import stat
 import time
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 from enum import Enum
+
+
+# Multiplicadores de tamaño
+SIZE_UNITS = {
+    'B': 1,
+    'K': 1024,
+    'KB': 1024,
+    'M': 1024**2,
+    'MB': 1024**2,
+    'G': 1024**3,
+    'GB': 1024**3,
+    'T': 1024**4,
+    'TB': 1024**4,
+    'P': 1024**5,
+    'PB': 1024**5,
+}
+
+
+def parse_size(value) -> int:
+    """
+    Parsea un tamaño a bytes.
+    
+    Soporta:
+        100       -> 100 bytes
+        "100"     -> 100 bytes
+        "10KB"    -> 10240 bytes
+        "5MB"     -> 5242880 bytes
+        "1GB"     -> 1073741824 bytes
+        "1.5GB"   -> 1610612736 bytes
+    """
+    if value is None:
+        return 0
+    
+    if isinstance(value, int):
+        return value
+    
+    if isinstance(value, float):
+        return int(value)
+    
+    if isinstance(value, str):
+        value = value.strip().upper()
+        
+        # Intentar como número simple
+        try:
+            return int(value)
+        except ValueError:
+            pass
+        
+        # Buscar número + unidad
+        match = re.match(r'^([\d.]+)\s*([A-Z]+)$', value)
+        if match:
+            num = float(match.group(1))
+            unit = match.group(2)
+            
+            if unit in SIZE_UNITS:
+                return int(num * SIZE_UNITS[unit])
+        
+        raise ValueError(f"Tamaño inválido: {value}")
+    
+    raise ValueError(f"Tamaño inválido: {value}")
+
+
+def format_size(size: int) -> str:
+    """Formatea un tamaño en bytes a formato legible."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
+        if size < 1024:
+            if unit == 'B':
+                return f"{size}{unit}"
+            return f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}PB"
 
 
 class NodeType(Enum):
@@ -23,11 +95,58 @@ class NodeType(Enum):
     DEVICE_BLOCK = "block"
 
 
+class ContentGenerator:
+    """Genera contenido on-demand para ficheros grandes."""
+    
+    @staticmethod
+    def zeros(offset: int, size: int) -> bytes:
+        """Genera bytes nulos (como /dev/zero)."""
+        return b'\x00' * size
+    
+    @staticmethod
+    def pattern(offset: int, size: int, pattern: bytes = b'ASOFS') -> bytes:
+        """Genera un patrón repetido."""
+        pattern_len = len(pattern)
+        start_in_pattern = offset % pattern_len
+        
+        result = bytearray(size)
+        for i in range(size):
+            result[i] = pattern[(start_in_pattern + i) % pattern_len]
+        
+        return bytes(result)
+    
+    @staticmethod
+    def random(offset: int, size: int, seed: int = 0) -> bytes:
+        """Genera bytes pseudo-aleatorios deterministas."""
+        import hashlib
+        
+        result = bytearray()
+        
+        block_num = offset // 32
+        block_offset = offset % 32
+        
+        while len(result) < size + block_offset:
+            h = hashlib.sha256()
+            h.update(f"{seed}:{block_num}".encode())
+            result.extend(h.digest())
+            block_num += 1
+        
+        return bytes(result[block_offset:block_offset + size])
+    
+    @staticmethod
+    def text(offset: int, size: int) -> bytes:
+        """Genera texto lorem ipsum repetido."""
+        lorem = (
+            b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
+            b"Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. "
+            b"Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris. "
+        )
+        return ContentGenerator.pattern(offset, size, lorem)
+
+
 @dataclass
 class BaseNode:
-    """
-    Nodo base del sistema de ficheros.
-    """
+    """Nodo base del sistema de ficheros."""
     name: str
     mode: int = 0o644
     uid: int = field(default_factory=os.getuid)
@@ -37,7 +156,7 @@ class BaseNode:
     ctime: float = field(default_factory=time.time)
     
     inode: int = 0
-    nlink: int = 1  # Contador de enlaces (hardlinks)
+    nlink: int = 1
     
     @property
     def node_type(self) -> NodeType:
@@ -54,6 +173,10 @@ class FileNode(BaseNode):
     size: int = 0
     content: Optional[bytes] = None
     
+    # Para contenido generado on-demand
+    content_type: str = "static"  # static, zeros, pattern, random, text
+    content_seed: int = 0
+    
     def __post_init__(self):
         if self.content is not None and self.size == 0:
             self.size = len(self.content)
@@ -65,6 +188,29 @@ class FileNode(BaseNode):
     @property
     def st_mode(self) -> int:
         return stat.S_IFREG | self.mode
+    
+    def read(self, offset: int, size: int) -> bytes:
+        """Lee contenido del fichero."""
+        if offset >= self.size:
+            return b''
+        
+        size = min(size, self.size - offset)
+        
+        # Si tiene contenido estático
+        if self.content is not None:
+            return self.content[offset:offset + size]
+        
+        # Generar contenido on-demand
+        if self.content_type == "zeros":
+            return ContentGenerator.zeros(offset, size)
+        elif self.content_type == "pattern":
+            return ContentGenerator.pattern(offset, size)
+        elif self.content_type == "random":
+            return ContentGenerator.random(offset, size, self.content_seed)
+        elif self.content_type == "text":
+            return ContentGenerator.text(offset, size)
+        else:
+            return b'\x00' * size
 
 
 @dataclass
@@ -157,9 +303,7 @@ Node = Union[FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode]
 
 
 class FileSystem:
-    """
-    Contenedor del sistema de ficheros virtual.
-    """
+    """Contenedor del sistema de ficheros virtual."""
     
     ROOT_INODE = 1
     
@@ -193,24 +337,13 @@ class FileSystem:
         self._nodes[node.inode] = node
         parent.add_child(node.name, node.inode)
         
-        # Incrementar nlink del padre si es directorio
         if isinstance(node, DirNode):
             parent.nlink += 1
         
         return node.inode
     
     def add_hardlink(self, name: str, target_inode: int, parent_inode: int = ROOT_INODE) -> int:
-        """
-        Crea un hardlink a un nodo existente.
-        
-        Args:
-            name: Nombre del nuevo enlace
-            target_inode: Inode del fichero destino
-            parent_inode: Directorio donde crear el enlace
-        
-        Returns:
-            Inode del fichero (el mismo que target_inode)
-        """
+        """Crea un hardlink a un nodo existente."""
         parent = self._nodes.get(parent_inode)
         if parent is None:
             raise ValueError(f"Parent inode {parent_inode} no existe")
@@ -223,10 +356,7 @@ class FileSystem:
         if isinstance(target, DirNode):
             raise ValueError("No se pueden crear hardlinks a directorios")
         
-        # Añadir entrada en el directorio padre
         parent.add_child(name, target_inode)
-        
-        # Incrementar contador de enlaces
         target.nlink += 1
         
         return target_inode
