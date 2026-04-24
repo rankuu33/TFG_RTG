@@ -1,0 +1,123 @@
+# ASOFS - Ejemplo completo con todas las funcionalidades
+# =======================================================
+# Distribuciones de permisos, tamaños y árboles de directorios
+
+seed: 42
+
+users:
+  alice: 1001
+  bob: 1002
+  admin: 2000
+
+groups:
+  users: 1000
+  staff: 2000
+
+root:
+  # Árbol de directorios con profundidad
+  - generate:
+      type: tree
+      count: 1
+      pattern: "proyecto"
+      depth: 3
+      breadth: 3
+      files_per_dir: 4
+      dir_pattern: "modulo_{d}_{n}"
+      file_pattern: "src_{n}.py"
+      file_size: ["1KB", "50KB"]
+      file_mode: "0644"
+      dir_mode: "0755"
+
+  # Ficheros con distribución de permisos estándar
+  - name: "permisos_variados"
+    type: dir
+    children:
+      - generate:
+          type: file
+          count: 20
+          pattern: "std_{n:03d}.txt"
+          mode: "dist:standard"
+          size: [100, 500]
+
+  # Ficheros con permisos especiales (SUID/SGID)
+  - name: "permisos_especiales"
+    type: dir
+    children:
+      - generate:
+          type: file
+          count: 10
+          pattern: "special_{n:02d}.bin"
+          mode: "dist:special"
+          size: "dist:small"
+
+  # Ficheros con permisos restrictivos
+  - name: "confidencial"
+    type: dir
+    mode: "0700"
+    children:
+      - generate:
+          type: file
+          count: 10
+          pattern: "secret_{n:02d}.dat"
+          mode: "dist:restrictive"
+          size: "dist:medium"
+
+  # Ficheros con distribución de tamaños variados
+  - name: "tamanos_mixtos"
+    type: dir
+    children:
+      - generate:
+          type: file
+          count: 15
+          pattern: "data_{n:03d}.bin"
+          size: "dist:mixed"
+          content_type: random
+
+  # Ficheros grandes
+  - name: "backups"
+    type: dir
+    children:
+      - generate:
+          type: file
+          count: 5
+          pattern: "backup_{n:02d}.tar.gz"
+          size: "dist:large"
+          content_type: zeros
+
+  # Árbol profundo para prácticas de find
+  - generate:
+      type: tree
+      count: 1
+      pattern: "deep_tree"
+      depth: 5
+      breadth: 2
+      files_per_dir: 2
+      file_size: [50, 200]
+      time_range: ["-365d", "-1d"]
+
+  # Symlinks rotos y válidos mezclados
+  - name: "enlaces"
+    type: dir
+    children:
+      - generate:
+          type: symlink
+          count: 5
+          pattern: "link_valido_{n}"
+          target: "../permisos_variados/std_{n:03d}.txt"
+      
+      - generate:
+          type: symlink
+          count: 5
+          pattern: "link_roto_{n}"
+          target: "/no/existe/fichero_{n}.txt"
+
+  # Mezcla de tipos
+  - name: "miscelanea"
+    type: dir
+    children:
+      - generate:
+          type: mixed
+          count: 20
+          pattern: "item_{n:03d}"
+          mode: "dist:standard"
+          size: [100, 1000]

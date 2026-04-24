@@ -3,16 +3,6 @@ ASOFS - Generador de ficheros
 =============================
 
 Genera ficheros automáticamente según patrones y distribuciones.
-
-Ejemplo YAML:
-    
-    root:
-      - generate:
-          type: file
-          count: 100
-          pattern: "fichero_{n:03d}.txt"
-          size: [100, 1000]  # rango aleatorio
-          mode: "0644"
 """
 
 import os
@@ -22,35 +12,118 @@ import time
 from typing import Dict, Any, List, Optional, Tuple
 
 from testfs.model import (
-    FileSystem, FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode
+    FileSystem, FileNode, DirNode, SymlinkNode, FifoNode, DeviceNode,
+    parse_size
 )
+
+
+# Distribuciones de permisos
+PERMISSION_DISTRIBUTIONS = {
+    'standard': [
+        (0o644, 0.5),   # -rw-r--r-- (50%)
+        (0o755, 0.2),   # -rwxr-xr-x (20%)
+        (0o600, 0.15),  # -rw------- (15%)
+        (0o777, 0.1),   # -rwxrwxrwx (10%)
+        (0o000, 0.05),  # ---------- (5%)
+    ],
+    'special': [
+        (0o4755, 0.3),  # SUID
+        (0o2755, 0.3),  # SGID
+        (0o1755, 0.2),  # Sticky
+        (0o4000, 0.1),  # Solo SUID
+        (0o2000, 0.1),  # Solo SGID
+    ],
+    'restrictive': [
+        (0o600, 0.4),
+        (0o400, 0.3),
+        (0o000, 0.2),
+        (0o100, 0.1),
+    ],
+    'open': [
+        (0o777, 0.4),
+        (0o775, 0.3),
+        (0o766, 0.2),
+        (0o755, 0.1),
+    ],
+}
+
+# Distribuciones de tamaños
+SIZE_DISTRIBUTIONS = {
+    'small': [
+        (0, 0.1),
+        (100, 0.3),
+        (500, 0.3),
+        (1024, 0.2),
+        (4096, 0.1),
+    ],
+    'medium': [
+        (1024, 0.2),
+        (10*1024, 0.3),
+        (100*1024, 0.3),
+        (500*1024, 0.15),
+        (1024*1024, 0.05),
+    ],
+    'large': [
+        (1024*1024, 0.3),
+        (10*1024*1024, 0.3),
+        (100*1024*1024, 0.2),
+        (500*1024*1024, 0.15),
+        (1024*1024*1024, 0.05),
+    ],
+    'mixed': [
+        (0, 0.1),
+        (1024, 0.2),
+        (100*1024, 0.3),
+        (1024*1024, 0.2),
+        (10*1024*1024, 0.15),
+        (100*1024*1024, 0.05),
+    ],
+}
+
+
+def pick_from_distribution(dist_name: str) -> int:
+    """Elige un permiso según distribución."""
+    dist = PERMISSION_DISTRIBUTIONS.get(dist_name, PERMISSION_DISTRIBUTIONS['standard'])
+    
+    r = random.random()
+    cumulative = 0
+    
+    for mode, prob in dist:
+        cumulative += prob
+        if r <= cumulative:
+            return mode
+    
+    return dist[-1][0]
+
+
+def pick_size_from_distribution(dist_name: str) -> int:
+    """Elige un tamaño según distribución."""
+    dist = SIZE_DISTRIBUTIONS.get(dist_name, SIZE_DISTRIBUTIONS['small'])
+    
+    r = random.random()
+    cumulative = 0
+    
+    for size, prob in dist:
+        cumulative += prob
+        if r <= cumulative:
+            # Añadir variación aleatoria ±50%
+            variation = random.uniform(0.5, 1.5)
+            return int(size * variation)
+    
+    return dist[-1][0]
 
 
 class Generator:
     """Generador de nodos para ASOFS."""
     
     def __init__(self, seed: int = None):
-        """
-        Args:
-            seed: Semilla para reproducibilidad
-        """
         if seed is not None:
             random.seed(seed)
         
         self._counter = 0
     
     def generate(self, fs: FileSystem, config: Dict[str, Any], parent_inode: int) -> List[int]:
-        """
-        Genera nodos según configuración.
-        
-        Args:
-            fs: FileSystem donde añadir
-            config: Configuración de generación
-            parent_inode: Inode del directorio padre
-        
-        Returns:
-            Lista de inodes creados
-        """
+        """Genera nodos según configuración."""
         gen_type = config.get('type', 'file')
         count = config.get('count', 1)
         
@@ -62,6 +135,8 @@ class Generator:
                 inode = self._generate_file(fs, config, parent_inode, i)
             elif gen_type == 'dir':
                 inode = self._generate_dir(fs, config, parent_inode, i)
+            elif gen_type == 'tree':
+                inode = self._generate_tree(fs, config, parent_inode, i)
             elif gen_type == 'symlink':
                 inode = self._generate_symlink(fs, config, parent_inode, i)
             elif gen_type == 'fifo':
@@ -79,20 +154,19 @@ class Generator:
     def _generate_file(self, fs: FileSystem, config: Dict, parent: int, index: int) -> int:
         """Genera un fichero."""
         name = self._expand_pattern(config.get('pattern', 'file_{n}.txt'), index)
-        mode = self._parse_mode(config.get('mode', '0644'))
-        size = self._resolve_range(config.get('size', 0))
+        mode = self._resolve_mode(config.get('mode', '0644'))
+        size = self._resolve_size(config.get('size', 0))
+        content_type = config.get('content_type', 'zeros')
         
-        # Generar contenido
-        content = self._generate_content(size, config.get('content_type', 'random'))
-        
-        # Timestamps
         atime, mtime, ctime = self._resolve_timestamps(config)
         
         node = FileNode(
             name=name,
             mode=mode,
             size=size,
-            content=content,
+            content=None,
+            content_type=content_type,
+            content_seed=hash(name) & 0xFFFFFFFF,
             atime=atime,
             mtime=mtime,
             ctime=ctime
@@ -103,7 +177,7 @@ class Generator:
     def _generate_dir(self, fs: FileSystem, config: Dict, parent: int, index: int) -> int:
         """Genera un directorio."""
         name = self._expand_pattern(config.get('pattern', 'dir_{n}'), index)
-        mode = self._parse_mode(config.get('mode', '0755'))
+        mode = self._resolve_mode(config.get('mode', '0755'))
         
         atime, mtime, ctime = self._resolve_timestamps(config)
         
@@ -122,6 +196,81 @@ class Generator:
             self.generate(fs, config['children'], inode)
         
         return inode
+    
+    def _generate_tree(self, fs: FileSystem, config: Dict, parent: int, index: int) -> int:
+        """
+        Genera un árbol de directorios con profundidad configurable.
+        
+        Config:
+            depth: 3              # Niveles de profundidad
+            breadth: 2            # Subdirectorios por nivel
+            files_per_dir: 5      # Ficheros por directorio
+            dir_pattern: "dir_{n}"
+            file_pattern: "file_{n}.txt"
+        """
+        depth = config.get('depth', 2)
+        breadth = config.get('breadth', 2)
+        files_per_dir = config.get('files_per_dir', 3)
+        dir_pattern = config.get('dir_pattern', 'nivel{d}_dir{n}')
+        file_pattern = config.get('file_pattern', 'file_{n}.txt')
+        file_size = config.get('file_size', [100, 1000])
+        file_mode = config.get('file_mode', '0644')
+        dir_mode = config.get('dir_mode', '0755')
+        
+        # Crear directorio raíz del árbol
+        root_name = self._expand_pattern(config.get('pattern', 'tree_{n}'), index)
+        root_node = DirNode(
+            name=root_name,
+            mode=self._resolve_mode(dir_mode)
+        )
+        root_inode = fs.add(root_node, parent)
+        
+        # Generar árbol recursivamente
+        self._generate_tree_level(
+            fs, root_inode, 1, depth, breadth, files_per_dir,
+            dir_pattern, file_pattern, file_size, file_mode, dir_mode
+        )
+        
+        return root_inode
+    
+    def _generate_tree_level(
+        self, fs: FileSystem, parent_inode: int, 
+        current_depth: int, max_depth: int, breadth: int, files_per_dir: int,
+        dir_pattern: str, file_pattern: str, file_size: Any, file_mode: str, dir_mode: str
+    ):
+        """Genera un nivel del árbol recursivamente."""
+        
+        # Generar ficheros en este nivel
+        for i in range(files_per_dir):
+            name = file_pattern.format(n=i, d=current_depth, N=self._counter)
+            self._counter += 1
+            
+            node = FileNode(
+                name=name,
+                mode=self._resolve_mode(file_mode),
+                size=self._resolve_size(file_size),
+                content_type='random',
+                content_seed=hash(name) & 0xFFFFFFFF
+            )
+            fs.add(node, parent_inode)
+        
+        # Si no hemos llegado al fondo, crear subdirectorios
+        if current_depth < max_depth:
+            for i in range(breadth):
+                dir_name = dir_pattern.format(n=i, d=current_depth, N=self._counter)
+                self._counter += 1
+                
+                dir_node = DirNode(
+                    name=dir_name,
+                    mode=self._resolve_mode(dir_mode)
+                )
+                dir_inode = fs.add(dir_node, parent_inode)
+                
+                # Recursión
+                self._generate_tree_level(
+                    fs, dir_inode, current_depth + 1, max_depth, breadth, files_per_dir,
+                    dir_pattern, file_pattern, file_size, file_mode, dir_mode
+                )
     
     def _generate_symlink(self, fs: FileSystem, config: Dict, parent: int, index: int) -> int:
         """Genera un symlink."""
@@ -143,7 +292,7 @@ class Generator:
     def _generate_fifo(self, fs: FileSystem, config: Dict, parent: int, index: int) -> int:
         """Genera un FIFO."""
         name = self._expand_pattern(config.get('pattern', 'pipe_{n}'), index)
-        mode = self._parse_mode(config.get('mode', '0644'))
+        mode = self._resolve_mode(config.get('mode', '0644'))
         
         atime, mtime, ctime = self._resolve_timestamps(config)
         
@@ -181,19 +330,58 @@ class Generator:
             num=self._random_string(4, string.digits)
         )
     
-    def _resolve_range(self, value: Any) -> int:
-        """Resuelve un valor o rango a un entero."""
+    def _resolve_mode(self, mode_value: Any) -> int:
+        """Resuelve permisos, soportando distribuciones."""
+        if mode_value is None:
+            return 0o644
+        
+        if isinstance(mode_value, int):
+            return mode_value
+        
+        if isinstance(mode_value, str):
+            # Distribución: "dist:standard", "dist:special"
+            if mode_value.startswith('dist:'):
+                dist_name = mode_value[5:]
+                return pick_from_distribution(dist_name)
+            
+            # Octal: "0755", "4755"
+            mode_str = mode_value.lower().replace('0o', '')
+            try:
+                return int(mode_str, 8)
+            except ValueError:
+                return 0o644
+        
+        return 0o644
+    
+    def _resolve_size(self, value: Any) -> int:
+        """Resuelve tamaño, soportando rangos y distribuciones."""
+        if value is None:
+            return 0
+        
         if isinstance(value, int):
             return value
+        
+        if isinstance(value, str):
+            # Distribución: "dist:small", "dist:large"
+            if value.startswith('dist:'):
+                dist_name = value[5:]
+                return pick_size_from_distribution(dist_name)
+            
+            # Tamaño con unidad: "10MB", "1GB"
+            return parse_size(value)
+        
         if isinstance(value, list) and len(value) == 2:
-            return random.randint(value[0], value[1])
+            # Rango: [100, 1000] o ["1KB", "10KB"]
+            min_size = parse_size(value[0])
+            max_size = parse_size(value[1])
+            return random.randint(min_size, max_size)
+        
         return 0
     
     def _resolve_timestamps(self, config: Dict) -> Tuple[float, float, float]:
         """Resuelve timestamps según configuración."""
         now = time.time()
         
-        # Si hay rango de tiempo
         time_range = config.get('time_range')
         if time_range:
             min_offset = self._parse_time_offset(time_range[0])
@@ -228,95 +416,8 @@ class Generator:
         
         return amount * multipliers[unit]
     
-    def _parse_mode(self, mode_value: Any) -> int:
-        """Parsea permisos."""
-        if isinstance(mode_value, int):
-            return mode_value
-        
-        if isinstance(mode_value, str):
-            mode_str = mode_value.lower().replace('0o', '')
-            try:
-                return int(mode_str, 8)
-            except ValueError:
-                return 0o644
-        
-        return 0o644
-    
-    def _generate_content(self, size: int, content_type: str = 'random') -> bytes:
-        """Genera contenido de fichero."""
-        if size == 0:
-            return b''
-        
-        if content_type == 'zero':
-            return b'\x00' * size
-        elif content_type == 'text':
-            return self._random_text(size).encode('utf-8')
-        else:  # random
-            return self._random_bytes(size)
-    
     def _random_string(self, length: int, chars: str = None) -> str:
         """Genera string aleatorio."""
         if chars is None:
             chars = string.ascii_lowercase + string.digits
         return ''.join(random.choice(chars) for _ in range(length))
-    
-    def _random_bytes(self, size: int) -> bytes:
-        """Genera bytes aleatorios."""
-        return bytes(random.randint(0, 255) for _ in range(size))
-    
-    def _random_text(self, size: int) -> str:
-        """Genera texto aleatorio legible."""
-        words = ['lorem', 'ipsum', 'dolor', 'sit', 'amet', 'consectetur',
-                 'adipiscing', 'elit', 'sed', 'do', 'eiusmod', 'tempor']
-        
-        result = []
-        current_size = 0
-        
-        while current_size < size:
-            word = random.choice(words)
-            if current_size + len(word) + 1 > size:
-                break
-            result.append(word)
-            current_size += len(word) + 1
-        
-        return ' '.join(result)
-
-
-# Distribuciones de permisos para casos de práctica
-PERMISSION_DISTRIBUTIONS = {
-    'standard': [
-        (0o644, 0.5),   # -rw-r--r-- (50%)
-        (0o755, 0.2),   # -rwxr-xr-x (20%)
-        (0o600, 0.15),  # -rw------- (15%)
-        (0o777, 0.1),   # -rwxrwxrwx (10%)
-        (0o000, 0.05),  # ---------- (5%)
-    ],
-    'special': [
-        (0o4755, 0.3),  # SUID
-        (0o2755, 0.3),  # SGID
-        (0o1755, 0.2),  # Sticky
-        (0o4000, 0.1),  # Solo SUID
-        (0o2000, 0.1),  # Solo SGID
-    ],
-    'restrictive': [
-        (0o600, 0.4),
-        (0o400, 0.3),
-        (0o000, 0.2),
-        (0o100, 0.1),
-    ],
-}
-
-
-def pick_from_distribution(dist_name: str) -> int:
-    """Elige un permiso según distribución."""
-    dist = PERMISSION_DISTRIBUTIONS.get(dist_name, PERMISSION_DISTRIBUTIONS['standard'])
-    
-    r = random.random()
-    cumulative = 0
-    
-    for mode, prob in dist:
-        cumulative += prob
-        if r <= cumulative:
-            return mode
-    
-    return dist[-1][0]
