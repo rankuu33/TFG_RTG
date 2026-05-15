@@ -36,6 +36,7 @@ class ConfigParser:
         self._pending_hardlinks: List[Tuple[str, str, int]] = []
         self._path_to_inode: Dict[str, int] = {}
         self._generator: Generator = None
+        self._seed: int = None  # FIX: guardar seed para content_seed
         
         self._users: Dict[str, int] = {}
         self._groups: Dict[str, int] = {}
@@ -73,6 +74,7 @@ class ConfigParser:
             self._defaults.update(defaults)
         
         seed = config.get('seed')
+        self._seed = seed  # FIX: guardar seed
         self._generator = Generator(seed=seed)
         
         fs = FileSystem()
@@ -197,6 +199,14 @@ class ConfigParser:
             return pick_from_distribution(dist_name)
         
         if isinstance(mode_value, int):
+            # FIX: Si es entero <= 7777, asumir que es octal mal escrito
+            # (el usuario puso mode: 644 en lugar de mode: "0644")
+            if mode_value <= 7777:
+                octal_str = str(mode_value)
+                try:
+                    return int(octal_str, 8)
+                except ValueError:
+                    return mode_value
             return mode_value
         
         if isinstance(mode_value, str):
@@ -272,6 +282,12 @@ class ConfigParser:
             content = None
             size = parse_size(size_value) if size_value else 0
         
+        # FIX: usar seed global + nombre para reproducibilidad
+        if self._seed is not None:
+            content_seed = hash((self._seed, name)) & 0xFFFFFFFF
+        else:
+            content_seed = hash(name) & 0xFFFFFFFF
+        
         return FileNode(
             name=name,
             mode=mode,
@@ -283,7 +299,7 @@ class ConfigParser:
             size=size,
             content=content,
             content_type=content_type,
-            content_seed=hash(name) & 0xFFFFFFFF
+            content_seed=content_seed
         )
     
     def _create_dir(self, config, name, mode, uid, gid, atime, mtime, ctime) -> DirNode:

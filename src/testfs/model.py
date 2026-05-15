@@ -218,6 +218,7 @@ class DirNode(BaseNode):
     """Directorio."""
     mode: int = 0o755
     children: Dict[str, int] = field(default_factory=dict)
+    parent: int = 1  # inode del padre (root apunta a sí mismo)
     
     @property
     def node_type(self) -> NodeType:
@@ -333,6 +334,10 @@ class FileSystem:
         
         node.inode = self._next_inode
         self._next_inode += 1
+        
+        # Asignar parent a directorios
+        if isinstance(node, DirNode):
+            node.parent = parent_inode
         
         self._nodes[node.inode] = node
         parent.add_child(node.name, node.inode)

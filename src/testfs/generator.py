@@ -117,6 +117,7 @@ class Generator:
     """Generador de nodos para ASOFS."""
     
     def __init__(self, seed: int = None):
+        self.seed = seed  # FIX: guardar seed para reproducibilidad
         if seed is not None:
             random.seed(seed)
         
@@ -160,13 +161,19 @@ class Generator:
         
         atime, mtime, ctime = self._resolve_timestamps(config)
         
+        # FIX: usar seed global + nombre para reproducibilidad
+        if self.seed is not None:
+            content_seed = hash((self.seed, name)) & 0xFFFFFFFF
+        else:
+            content_seed = hash(name) & 0xFFFFFFFF
+        
         node = FileNode(
             name=name,
             mode=mode,
             size=size,
             content=None,
             content_type=content_type,
-            content_seed=hash(name) & 0xFFFFFFFF,
+            content_seed=content_seed,
             atime=atime,
             mtime=mtime,
             ctime=ctime
@@ -191,9 +198,20 @@ class Generator:
         
         inode = fs.add(node, parent)
         
-        # Generar hijos si se especifica
+        # FIX: Manejar children correctamente
         if 'children' in config:
-            self.generate(fs, config['children'], inode)
+            children = config['children']
+            if isinstance(children, list):
+                # Lista de configs de generación
+                for child_config in children:
+                    if isinstance(child_config, dict) and 'generate' in child_config:
+                        self.generate(fs, child_config['generate'], inode)
+                    elif isinstance(child_config, dict):
+                        # Config de generación directa
+                        self.generate(fs, child_config, inode)
+            elif isinstance(children, dict):
+                # Config de generación único
+                self.generate(fs, children, inode)
         
         return inode
     
@@ -245,12 +263,18 @@ class Generator:
             name = file_pattern.format(n=i, d=current_depth, N=self._counter)
             self._counter += 1
             
+            # FIX: usar seed global para content_seed
+            if self.seed is not None:
+                content_seed = hash((self.seed, name)) & 0xFFFFFFFF
+            else:
+                content_seed = hash(name) & 0xFFFFFFFF
+            
             node = FileNode(
                 name=name,
                 mode=self._resolve_mode(file_mode),
                 size=self._resolve_size(file_size),
                 content_type='random',
-                content_seed=hash(name) & 0xFFFFFFFF
+                content_seed=content_seed
             )
             fs.add(node, parent_inode)
         

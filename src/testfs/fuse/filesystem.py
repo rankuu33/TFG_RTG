@@ -166,9 +166,12 @@ class ASOFS(pyfuse3.Operations):
         if not isinstance(node, DirNode):
             raise pyfuse3.FUSEError(errno.ENOTDIR)
         
+        # FIX: usar el parent real del directorio
+        parent_inode = node.parent if hasattr(node, 'parent') else inode
+        
         entries = [
             ('.', inode),
-            ('..', inode),
+            ('..', parent_inode),
         ]
         entries.extend(node.children.items())
         
@@ -190,8 +193,13 @@ class ASOFS(pyfuse3.Operations):
         if node is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        if not isinstance(node, FileNode):
+        # FIX: errores específicos por tipo de nodo
+        if isinstance(node, DirNode):
             raise pyfuse3.FUSEError(errno.EISDIR)
+        elif isinstance(node, (FifoNode, DeviceNode)):
+            raise pyfuse3.FUSEError(errno.ENXIO)
+        elif not isinstance(node, FileNode):
+            raise pyfuse3.FUSEError(errno.EOPNOTSUPP)
         
         return pyfuse3.FileInfo(fh=inode)
     
@@ -203,8 +211,11 @@ class ASOFS(pyfuse3.Operations):
         if node is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
         
-        if not isinstance(node, FileNode):
+        # FIX: errores específicos por tipo de nodo
+        if isinstance(node, DirNode):
             raise pyfuse3.FUSEError(errno.EISDIR)
+        elif not isinstance(node, FileNode):
+            raise pyfuse3.FUSEError(errno.EINVAL)
         
         # Usar el método read() del nodo (genera contenido on-demand)
         return node.read(offset, size)
@@ -223,42 +234,5 @@ class ASOFS(pyfuse3.Operations):
         return node.target.encode('utf-8')
 
 
-def main():
-    parser = ArgumentParser(description='ASOFS - Sistema de ficheros para ASO')
-    parser.add_argument('mountpoint', help='Directorio donde montar')
-    parser.add_argument('-d', '--debug', action='store_true', help='Modo debug')
-    
-    args = parser.parse_args()
-    
-    if not os.path.exists(args.mountpoint):
-        os.makedirs(args.mountpoint)
-    
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-    else:
-        logging.getLogger().setLevel(logging.INFO)
-    
-    asofs = ASOFS()
-    
-    fuse_options = set(pyfuse3.default_options)
-    fuse_options.add('fsname=asofs')
-    
-    if args.debug:
-        fuse_options.add('debug')
-    
-    pyfuse3.init(asofs, args.mountpoint, fuse_options)
-    
-    log.info(f"ASOFS montado en {args.mountpoint}")
-    log.info("Ctrl+C para desmontar")
-    
-    try:
-        trio.run(pyfuse3.main)
-    except KeyboardInterrupt:
-        log.info("Desmontando...")
-    finally:
-        pyfuse3.close()
-        log.info("ASOFS desmontado")
-
-
-if __name__ == '__main__':
-    main()
+# NOTA: El entry point real está en testfs.cli:main
+# Este módulo no debe ejecutarse directamente
