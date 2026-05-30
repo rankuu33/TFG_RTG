@@ -27,6 +27,7 @@ Fecha: **Mayo de 2026**
 - Generación masiva de nodos mediante patrones.
 - Generación de árboles de directorios configurables.
 - Generación de scripts para crear y eliminar usuarios/grupos ficticios de prácticas.
+- Prototipo de integración con Podman para resolución de usuarios ficticios sin modificar el sistema anfitrión.
 - Conjunto de ejemplos YAML orientados a escenarios docentes.
 - Suite de pruebas funcionales basada en BATS.
 
@@ -733,6 +734,11 @@ TFG_RTG/
 ├── LICENSE
 ├── pyproject.toml
 ├── requirements.txt
+├── asofs-podman.sh
+├── container/
+│   ├── Containerfile
+│   ├── entrypoint.sh
+│   └── README.md
 ├── examples/
 │   └── *.yaml
 ├── src/
@@ -764,6 +770,8 @@ Nota: en la versión actual, el paquete Python interno conserva el nombre `testf
 - `filesystem.py`: integración con FUSE3.
 - `examples/`: configuraciones de ejemplo.
 - `tests/`: pruebas funcionales.
+- `container/`: prototipo de integración con Podman.
+- `asofs-podman.sh`: wrapper para ejecución con Podman.
 
 ---
 
@@ -861,6 +869,51 @@ Antes de ejecutar estos scripts con `sudo`, se recomienda revisar siempre su con
 cat setup.sh
 cat cleanup.sh
 ```
+
+---
+
+## Ejecución con Podman (prototipo)
+
+Como alternativa a `setup-users`, ASOFS incluye un prototipo de integración con Podman que permite resolver nombres de usuarios ficticios sin modificar el sistema anfitrión ni requerir privilegios de administración.
+
+El contenedor registra los usuarios y grupos del YAML en su propio `/etc/passwd` y `/etc/group`, de forma que `ls -l` muestra nombres en lugar de UIDs numéricos.
+
+### Requisitos
+
+- Podman instalado (`sudo apt install podman`)
+
+### Uso
+
+```bash
+# Primera ejecución (construye la imagen automáticamente)
+./asofs-podman.sh examples/usuarios.yaml
+```
+
+Dentro del contenedor:
+
+```bash
+# Los nombres de usuario se resuelven
+ls -la /mnt/asofs/
+# drwx------ 1 alice    students 4096 may 29 20:10 .
+# -rw-r--r-- 1 alice    students   14 may 29 20:10 tarea1.txt
+
+# Búsqueda por usuario/grupo
+find /mnt/asofs -user alice
+find /mnt/asofs -group students
+
+# Salir del contenedor
+exit
+```
+
+### Reconstruir la imagen
+
+Si se modifica el código de ASOFS:
+
+```bash
+./asofs-podman.sh --build
+```
+
+Los usuarios se leen dinámicamente del YAML proporcionado en cada ejecución.
 
 ---
 
